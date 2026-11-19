@@ -189,6 +189,14 @@ async function request<T>(
     return undefined as T;
   }
 
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('text/html')) {
+    throw new ApiClientError(
+      'Backend API endpoint returned HTML instead of JSON. Ensure VITE_API_BASE_URL points to your active backend server.',
+      502
+    );
+  }
+
   if (responseType === 'blob') {
     return (await response.blob()) as T;
   }
