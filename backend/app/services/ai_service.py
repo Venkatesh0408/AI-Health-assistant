@@ -100,7 +100,43 @@ class AIService:
         if interaction is None:
             return ""
 
-        # Interactions API typically exposes `outputs` list with text items
+        # google-genai >= 3.x exposes `output_text` directly on Interaction
+        output_text = getattr(interaction, "output_text", None)
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text.strip()
+
+        # google-genai >= 2.x/3.x also exposes `steps` (filter out thought steps)
+        steps = getattr(interaction, "steps", None)
+        if steps:
+            collected_steps: list[str] = []
+            for step in steps:
+                step_type = getattr(step, "type", None) or (
+                    step.get("type") if isinstance(step, dict) else None
+                )
+                if step_type == "thought":
+                    continue
+                step_text = getattr(step, "text", None) or (
+                    step.get("text") if isinstance(step, dict) else None
+                )
+                if isinstance(step_text, str) and step_text.strip():
+                    collected_steps.append(step_text.strip())
+                    continue
+                step_content = getattr(step, "content", None) or (
+                    step.get("content") if isinstance(step, dict) else None
+                )
+                if isinstance(step_content, str) and step_content.strip():
+                    collected_steps.append(step_content.strip())
+                elif isinstance(step_content, list):
+                    for part in step_content:
+                        part_text = getattr(part, "text", None) or (
+                            part.get("text") if isinstance(part, dict) else None
+                        )
+                        if isinstance(part_text, str) and part_text.strip():
+                            collected_steps.append(part_text.strip())
+            if collected_steps:
+                return "\n\n".join(collected_steps)
+
+        # Legacy / mock Interactions API exposes `outputs` list with text items
         outputs = getattr(interaction, "outputs", None)
         if outputs:
             collected: list[str] = []
@@ -117,7 +153,6 @@ class AIService:
                     content = item.get("content")
                     if isinstance(content, str) and content.strip():
                         collected.append(content.strip())
-                # Some output objects wrap parts/content
                 content_attr = getattr(item, "content", None)
                 if isinstance(content_attr, str) and content_attr.strip():
                     collected.append(content_attr.strip())
