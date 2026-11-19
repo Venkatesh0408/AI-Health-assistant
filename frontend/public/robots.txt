@@ -1,0 +1,6 @@
+# robots.txt for AI Health Assistant
+User-agent: *
+Allow: /
+
+# Sitemaps
+Sitemap: https://ai-health-assistant-85q.pages.dev/sitemap.xml
