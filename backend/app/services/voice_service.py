@@ -15,28 +15,42 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Recommended voice library for healthcare assistance
+# Recommended voice library for healthcare assistance (free-tier and standard API compatible)
 RECOMMENDED_VOICES = [
     {
-        "id": "21m00Tcm4TlvDq8ikWAM",
-        "name": "Rachel (Calm & Reassuring)",
+        "id": "EXAVITQu4vr4xnSDxMaL",
+        "name": "Sarah (Warm & Reassuring)",
         "provider": "elevenlabs",
         "gender": "female",
-        "description": "Warm, articulate, ideal for healthcare advice and empathy.",
+        "description": "Warm, articulate, ideal for healthcare advice and patient empathy.",
     },
     {
-        "id": "AZnzlk1XvdvUeBnXmlld",
-        "name": "Domi (Friendly & Clear)",
+        "id": "JBFqnCBsd6RMkjVDRZzb",
+        "name": "George (Trustworthy & Calm)",
+        "provider": "elevenlabs",
+        "gender": "male",
+        "description": "Deep, calm, and reassuring clinician tone.",
+    },
+    {
+        "id": "FGY2WhTYpPnrIDTdsKH5",
+        "name": "Laura (Friendly & Clear)",
         "provider": "elevenlabs",
         "gender": "female",
         "description": "Energetic and crisp, excellent for instructions.",
     },
     {
-        "id": "pNInz6obpgDQGcFmaJgB",
-        "name": "Adam (Professional & Grounded)",
+        "id": "Xb7hH8MSUJpSbSDYk0k2",
+        "name": "Alice (Articulate & Confident)",
+        "provider": "elevenlabs",
+        "gender": "female",
+        "description": "Clear and polished medical educator voice.",
+    },
+    {
+        "id": "nPczCjzI2devNBz1zQrb",
+        "name": "Brian (Deep & Grounded)",
         "provider": "elevenlabs",
         "gender": "male",
-        "description": "Deep, calm, and reassuring clinician tone.",
+        "description": "Calm, steady authority tone.",
     },
     {
         "id": "alloy",

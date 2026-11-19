@@ -61,7 +61,7 @@ def test_voice_voices_endpoint(client: TestClient):
     data = res.json()
     assert "voices" in data
     assert "active_provider" in data
-    assert any(v["id"] == "21m00Tcm4TlvDq8ikWAM" for v in data["voices"])
+    assert any(v["id"] == "EXAVITQu4vr4xnSDxMaL" for v in data["voices"])
 
 
 @pytest.mark.asyncio

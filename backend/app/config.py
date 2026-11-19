@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     )
     ELEVENLABS_API_KEY: str = Field(default="", description="ElevenLabs API key")
     ELEVENLABS_VOICE_ID: str = Field(
-        default="21m00Tcm4TlvDq8ikWAM",  # "Rachel" (warm, calming healthcare voice)
+        default="EXAVITQu4vr4xnSDxMaL",  # "Sarah" (warm, calming healthcare voice)
         description="ElevenLabs Voice ID",
     )
     ELEVENLABS_MODEL_ID: str = Field(
