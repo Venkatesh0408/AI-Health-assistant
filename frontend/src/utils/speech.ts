@@ -1,3 +1,5 @@
+import { api } from '../services/api';
+
 // Multi-language Voice Input (STT) & Voice Output (TTS) Utilities
 
 // Cross-browser SpeechRecognition typing
@@ -158,8 +160,28 @@ export function cleanMarkdownForTTS(text: string): string {
     .trim();
 }
 
-/** Stop any ongoing speech synthesis */
+let activeAudioElement: HTMLAudioElement | null = null;
+let activeAudioBlobUrl: string | null = null;
+
+/** Stop any ongoing speech synthesis or audio playback */
 export function stopSpeaking(): void {
+  if (activeAudioElement) {
+    try {
+      activeAudioElement.pause();
+      activeAudioElement.currentTime = 0;
+    } catch {
+      // Ignored
+    }
+    activeAudioElement = null;
+  }
+  if (activeAudioBlobUrl) {
+    try {
+      URL.revokeObjectURL(activeAudioBlobUrl);
+    } catch {
+      // Ignored
+    }
+    activeAudioBlobUrl = null;
+  }
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     window.speechSynthesis.cancel();
   }
@@ -174,19 +196,13 @@ export interface SpeakOptions {
   onError?: (err: Error) => void;
 }
 
-/**
- * Read text aloud using browser SpeechSynthesis with matching language voice.
- */
-export function speakText(text: string, options: SpeakOptions = {}): void {
+/** Fallback to browser Web Speech API */
+function fallbackBrowserSpeech(cleaned: string, options: SpeakOptions = {}): void {
   if (!isSpeechSynthesisSupported()) {
     options.onError?.(new Error('Speech synthesis is not supported on this device.'));
+    options.onEnd?.();
     return;
   }
-
-  stopSpeaking();
-
-  const cleaned = cleanMarkdownForTTS(text);
-  if (!cleaned) return;
 
   const utterance = new SpeechSynthesisUtterance(cleaned);
   const targetLang = options.speechLang || 'en-US';
@@ -222,4 +238,41 @@ export function speakText(text: string, options: SpeakOptions = {}): void {
   };
 
   window.speechSynthesis.speak(utterance);
+}
+
+/**
+ * Read text aloud using High-Definition AI Voice (ElevenLabs / OpenAI),
+ * falling back gracefully to the browser's native SpeechSynthesis if key is not yet configured.
+ */
+export async function speakText(text: string, options: SpeakOptions = {}): Promise<void> {
+  stopSpeaking();
+
+  const cleaned = cleanMarkdownForTTS(text);
+  if (!cleaned) return;
+
+  options.onStart?.();
+
+  try {
+    const audioBlob = await api.voice.synthesize(cleaned);
+    const audioUrl = URL.createObjectURL(audioBlob);
+    activeAudioBlobUrl = audioUrl;
+
+    const audio = new Audio(audioUrl);
+    activeAudioElement = audio;
+
+    audio.onended = () => {
+      stopSpeaking();
+      options.onEnd?.();
+    };
+
+    audio.onerror = () => {
+      stopSpeaking();
+      fallbackBrowserSpeech(cleaned, options);
+    };
+
+    await audio.play();
+  } catch {
+    // If backend key not configured or request fails, gracefully fallback
+    fallbackBrowserSpeech(cleaned, options);
+  }
 }
