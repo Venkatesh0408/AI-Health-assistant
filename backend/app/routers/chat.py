@@ -143,7 +143,10 @@ async def send_message(
             conversation_id=conversation_id,
             role="user",
             content=payload.content,
-            metadata={"has_image": bool(payload.image_url)},
+            metadata={
+                "has_image": bool(payload.image_url),
+                "language": payload.language or "en",
+            },
             image_url=payload.image_url,
         )
 
@@ -167,9 +170,11 @@ async def send_message(
             conversation_history=history,
             user_profile=user_profile,
             image_url=payload.image_url,
+            language=payload.language or "en",
         )
 
         assistant_metadata = result.to_metadata()
+        assistant_metadata["language"] = payload.language or "en"
         assistant_msg = supabase_service.add_message(
             user_id=current_user.user_id,
             conversation_id=conversation_id,

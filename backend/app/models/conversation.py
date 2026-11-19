@@ -30,6 +30,14 @@ class MessageCreate(BaseModel):
 
     content: str = Field(..., min_length=1, max_length=5000)
     image_url: Optional[str] = Field(default=None, max_length=2048)
+    language: Optional[str] = Field(default="en", max_length=10)
+
+    @field_validator("language")
+    @classmethod
+    def clean_language(cls, value: Optional[str]) -> str:
+        if not value:
+            return "en"
+        return value.strip().lower()[:10]
 
     @field_validator("content")
     @classmethod

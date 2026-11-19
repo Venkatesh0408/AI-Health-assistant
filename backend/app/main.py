@@ -13,7 +13,7 @@ from app.config import settings
 from app.middleware.cors import configure_cors
 from app.middleware.rate_limit import limiter, rate_limit_exceeded_handler
 from app.middleware.security import SecurityHeadersMiddleware
-from app.routers import auth, chat, health, images, privacy, reports, users
+from app.routers import auth, chat, health, images, privacy, reports, users, voice
 from app.services.image_service import ImageServiceError
 from app.services.supabase_service import SupabaseServiceError
 
@@ -138,6 +138,7 @@ def create_app() -> FastAPI:
         reports.router,
         users.router,
         privacy.router,
+        voice.router,
     ):
         application.include_router(router, prefix="/api")
 

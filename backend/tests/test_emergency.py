@@ -25,6 +25,11 @@ class TestEmergencyCategories:
             ("Severe head injury after a car accident with a deep wound", "trauma"),
             ("I feel hopeless and I want to kill myself tonight", "mental_health"),
             ("I am having suicidal thoughts and don't want to live anymore", "mental_health"),
+            ("Mere chhati me dard ho raha hai", "cardiac"),
+            ("Enaku nenju vali romba athigama iruku", "cardiac"),
+            ("Mujhe saas nahi aa rahi hai", "respiratory"),
+            ("Moochu thinaral erpadugirathu", "respiratory"),
+            ("Main atmahatya karna chahta hoon", "mental_health"),
         ],
     )
     def test_detects_all_emergency_categories(

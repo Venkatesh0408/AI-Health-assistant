@@ -39,6 +39,27 @@ class Settings(BaseSettings):
         default="gemini-4-hydrogen", description="Gemini model identifier"
     )
 
+    # Voice AI (Text-to-Speech & Speech) configuration
+    VOICE_PROVIDER: str = Field(
+        default="elevenlabs",
+        description="Active voice TTS provider: elevenlabs | openai | web_speech | auto",
+    )
+    ELEVENLABS_API_KEY: str = Field(default="", description="ElevenLabs API key")
+    ELEVENLABS_VOICE_ID: str = Field(
+        default="21m00Tcm4TlvDq8ikWAM",  # "Rachel" (warm, calming healthcare voice)
+        description="ElevenLabs Voice ID",
+    )
+    ELEVENLABS_MODEL_ID: str = Field(
+        default="eleven_multilingual_v2",
+        description="ElevenLabs model identifier (eleven_multilingual_v2, eleven_turbo_v2_5, eleven_flash_v2_5)",
+    )
+    OPENAI_API_KEY: str = Field(default="", description="OpenAI API key (optional alternative TTS)")
+    OPENAI_VOICE: str = Field(
+        default="alloy",
+        description="OpenAI voice: alloy | echo | fable | onyx | nova | shimmer",
+    )
+    VOICE_ENABLED: bool = Field(default=True, description="Master toggle for Voice TTS")
+
     # Application configuration
     APP_ENV: str = Field(default="development", description="Environment: development|staging|production")
     APP_SECRET_KEY: str = Field(

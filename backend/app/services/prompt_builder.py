@@ -5,6 +5,40 @@ from typing import Any, Optional
 
 from app.utils.sanitizers import sanitize_text
 
+SUPPORTED_LANGUAGES: dict[str, str] = {
+    "en": "English",
+    "hi": "Hindi (हिन्दी)",
+    "ta": "Tamil (தமிழ்)",
+    "te": "Telugu (తెలుగు)",
+    "kn": "Kannada (ಕನ್ನಡ)",
+    "ml": "Malayalam (മലയാളം)",
+    "mr": "Marathi (मराठी)",
+    "bn": "Bengali (বাংলা)",
+    "gu": "Gujarati (ગુજરાતી)",
+    "es": "Spanish (Español)",
+    "fr": "French (Français)",
+    "de": "German (Deutsch)",
+    "ar": "Arabic (العربية)",
+}
+
+
+def build_language_instruction(language: Optional[str]) -> str:
+    """Generate explicit language instructions for the AI model."""
+    if not language:
+        return ""
+    code = language.strip().lower()
+    if code in ("en", "english"):
+        return ""
+    lang_name = SUPPORTED_LANGUAGES.get(code, language)
+    return (
+        f"\n\nCRITICAL LANGUAGE INSTRUCTION:\n"
+        f"You MUST respond entirely in {lang_name}. "
+        f"Provide empathetic, natural, and medically accurate guidance in {lang_name}. "
+        f"If medical terminology is technical, explain it simply in {lang_name} "
+        f"(you may include the standard English medical term in parentheses for clinical clarity). "
+        f"Include a clear medical disclaimer translated into {lang_name} at the end."
+    )
+
 HEALTH_QUERY_TEMPLATE = """{profile_block}{history_block}{context_notes}
 User's current health question:
 \"\"\"{user_message}\"\"\"
@@ -133,6 +167,7 @@ class PromptBuilder:
         detected_symptoms: Optional[list[str]] = None,
         needs_followup: bool = False,
         has_previous_interaction: bool = False,
+        language: Optional[str] = "en",
     ) -> str:
         """Build the prompt for a health chat turn."""
         clean_message = sanitize_text(user_message, max_length=4000)
@@ -149,6 +184,10 @@ class PromptBuilder:
         if detected_symptoms:
             clean_symptoms = [sanitize_text(s, max_length=60) for s in detected_symptoms[:10]]
             context_notes = f"Symptoms mentioned so far: {', '.join(clean_symptoms)}\n\n"
+
+        lang_instruction = build_language_instruction(language)
+        if lang_instruction:
+            context_notes += lang_instruction + "\n\n"
 
         template = FOLLOWUP_QUERY_TEMPLATE if needs_followup else HEALTH_QUERY_TEMPLATE
         return template.format(

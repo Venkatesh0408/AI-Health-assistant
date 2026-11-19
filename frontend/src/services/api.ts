@@ -328,7 +328,7 @@ export const api = {
 
     async sendMessage(
       conversationId: string,
-      payload: { content: string; image_url?: string }
+      payload: { content: string; image_url?: string; language?: string }
     ): Promise<SendMessageResponse> {
       const raw = await request<Record<string, unknown>>(
         `/chat/conversations/${encodeURIComponent(conversationId)}/messages`,
@@ -512,6 +512,36 @@ export const api = {
       return request<PrivacySettings>('/privacy/settings', {
         method: 'PUT',
         body: payload,
+      });
+    },
+  },
+
+  voice: {
+    async getStatus(): Promise<{
+      enabled: boolean;
+      provider: string;
+      ready: boolean;
+      has_elevenlabs_key: boolean;
+      has_openai_key: boolean;
+      voice_id: string;
+      model_id: string;
+      recommended_voices: Array<{
+        id: string;
+        name: string;
+        provider: string;
+        gender: string;
+        description: string;
+      }>;
+    }> {
+      return request('/voice/status', { requiresAuth: false });
+    },
+
+    async synthesize(text: string, voiceId?: string): Promise<Blob> {
+      return request<Blob>('/voice/synthesize', {
+        method: 'POST',
+        body: { text, voice_id: voiceId },
+        responseType: 'blob',
+        requiresAuth: false,
       });
     },
   },

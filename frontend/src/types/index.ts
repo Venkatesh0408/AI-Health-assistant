@@ -133,6 +133,20 @@ export interface EmergencyInfo {
   message?: string;
 }
 
+export interface SupportedLanguage {
+  code: string;
+  name: string;
+  nativeName: string;
+  speechCode: string;
+  flag: string;
+}
+
+export interface SendMessagePayload {
+  content: string;
+  image_url?: string;
+  language?: string;
+}
+
 export interface SendMessageResponse {
   user_message?: Message;
   assistant_message: Message;

@@ -1,14 +1,19 @@
-import { AlertTriangle, Bot, User as UserIcon } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, Bot, Square, User as UserIcon, Volume2 } from 'lucide-react';
 import clsx from 'clsx';
 import type { Message } from '../../types';
 import { formatTime } from '../../utils/formatDate';
 import { markdownToHtml } from '../../utils/markdown';
+import { getLanguageByCode } from '../../utils/languages';
+import { isSpeechSynthesisSupported, speakText, stopSpeaking } from '../../utils/speech';
 
 interface MessageBubbleProps {
   message: Message;
 }
 
 export function MessageBubble({ message }: MessageBubbleProps) {
+  const [isPlayingVoice, setIsPlayingVoice] = useState(false);
+
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
   const isEmergency = Boolean(
@@ -16,6 +21,26 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       (message.metadata?.emergency as { is_emergency?: boolean } | undefined)
         ?.is_emergency
   );
+
+  const langCode = typeof message.metadata?.language === 'string' ? message.metadata.language : 'en';
+  const langInfo = getLanguageByCode(langCode);
+  const speechSupported = isSpeechSynthesisSupported();
+
+  const handleToggleSpeak = () => {
+    if (isPlayingVoice) {
+      stopSpeaking();
+      setIsPlayingVoice(false);
+      return;
+    }
+
+    setIsPlayingVoice(true);
+    speakText(message.content, {
+      speechLang: langInfo.speechCode,
+      onStart: () => setIsPlayingVoice(true),
+      onEnd: () => setIsPlayingVoice(false),
+      onError: () => setIsPlayingVoice(false),
+    });
+  };
 
   if (isSystem) {
     return (
@@ -54,7 +79,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
       <div
         className={clsx(
-          'max-w-[85%] rounded-2xl px-4 py-3 sm:max-w-[75%]',
+          'group relative max-w-[85%] rounded-2xl px-4 py-3 sm:max-w-[75%]',
           isUser
             ? 'rounded-br-sm bg-blue-600 text-white'
             : isEmergency
@@ -85,13 +110,48 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
         <div
           className={clsx(
-            'mt-1.5 flex items-center gap-2 text-[11px]',
-            isUser ? 'justify-end text-blue-100' : 'justify-start text-gray-500'
+            'mt-2 flex flex-wrap items-center justify-between gap-2 border-t pt-1.5 text-[11px]',
+            isUser
+              ? 'border-blue-500/40 text-blue-100'
+              : 'border-gray-200 text-gray-500'
           )}
         >
-          <span>{formatTime(message.created_at)}</span>
-          {!isUser && isEmergency && (
-            <span className="font-semibold text-red-700">Emergency Alert</span>
+          <div className="flex items-center gap-2">
+            <span>{formatTime(message.created_at)}</span>
+            {!isUser && isEmergency && (
+              <span className="font-semibold text-red-700">Emergency Alert</span>
+            )}
+            {!isUser && langCode !== 'en' && (
+              <span className="inline-flex items-center gap-1 rounded bg-gray-200/80 px-1.5 py-0.5 text-[10px] font-medium text-gray-700">
+                {langInfo.flag} {langInfo.nativeName}
+              </span>
+            )}
+          </div>
+
+          {/* Voice Read-Aloud Button for Assistant Messages */}
+          {!isUser && speechSupported && (
+            <button
+              type="button"
+              onClick={handleToggleSpeak}
+              title={isPlayingVoice ? 'Stop voice playback' : `Read aloud in ${langInfo.name}`}
+              aria-label={isPlayingVoice ? 'Stop reading message' : 'Read message aloud'}
+              className={clsx(
+                'flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
+                isPlayingVoice
+                  ? 'bg-blue-600 text-white animate-pulse'
+                  : 'bg-white/80 text-gray-700 hover:bg-white hover:text-blue-600 border border-gray-200'
+              )}
+            >
+              {isPlayingVoice ? (
+                <>
+                  <Square className="h-3 w-3" /> Stop
+                </>
+              ) : (
+                <>
+                  <Volume2 className="h-3 w-3" /> Listen
+                </>
+              )}
+            </button>
           )}
         </div>
       </div>

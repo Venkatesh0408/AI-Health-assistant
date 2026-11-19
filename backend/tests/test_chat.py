@@ -181,6 +181,67 @@ class TestChatFlow:
         # Deterministic emergency detector must bypass AI call completely
         ai_mock.assert_not_called()
 
+    def test_send_multilingual_message_passes_language(
+        self, authed_client: TestClient
+    ) -> None:
+        now = _now_iso()
+        conv_row = {
+            "id": CONV_ID,
+            "user_id": TEST_USER_ID,
+            "title": "New Conversation",
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        ai_mock = MagicMock(
+            return_value=AIResponse(
+                text="नमस्ते। सामान्य स्वास्थ्य जानकारी: यह एक चिकित्सीय निदान नहीं है। (not a medical diagnosis)",
+                interaction_id="inter_hindi_1",
+                sections={"Overview": "सामान्य स्वास्थ्य जानकारी"},
+            )
+        )
+
+        persisted_messages = []
+
+        def fake_add_message(
+            user_id: str, conversation_id: str, role: str, content: str, metadata=None, image_url=None
+        ) -> dict:
+            entry = {
+                "id": f"msg-{len(persisted_messages)}",
+                "conversation_id": conversation_id,
+                "role": role,
+                "content": content,
+                "metadata": metadata or {},
+                "image_url": image_url,
+                "created_at": now,
+            }
+            persisted_messages.append(entry)
+            return entry
+
+        engine = __import__("app.services.health_query_engine", fromlist=["health_query_engine"]).health_query_engine
+        with (
+            patch("app.routers.chat.supabase_service.get_conversation", return_value=conv_row),
+            patch("app.routers.chat.supabase_service.get_conversation_messages", return_value=[]),
+            patch("app.routers.chat.supabase_service.get_user_profile", return_value=None),
+            patch("app.routers.chat.supabase_service.add_message", side_effect=fake_add_message),
+            patch("app.routers.chat.supabase_service.update_conversation_timestamp"),
+            patch.object(engine._ai, "generate_health_response", ai_mock),
+        ):
+            resp = authed_client.post(
+                f"/api/chat/conversations/{CONV_ID}/messages",
+                json={
+                    "content": "Mujhe do din se thoda bukhar hai.",
+                    "language": "hi",
+                },
+            )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["metadata"]["language"] == "hi"
+        # Check prompt passed to AI included Hindi instruction
+        prompt_arg = ai_mock.call_args[1]["prompt"]
+        assert "Hindi" in prompt_arg
+
     def test_soft_delete_conversation(self, authed_client: TestClient) -> None:
         with patch(
             "app.routers.chat.supabase_service.soft_delete_conversation",

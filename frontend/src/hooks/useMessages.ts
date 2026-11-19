@@ -14,7 +14,8 @@ export interface UseMessagesReturn {
   sendMessage: (
     content: string,
     imageFile?: File | null,
-    overrideConversationId?: string
+    overrideConversationId?: string,
+    language?: string
   ) => Promise<{ success: boolean; generatedTitle?: string }>;
 }
 
@@ -99,7 +100,8 @@ export function useMessages(conversationId: string | null): UseMessagesReturn {
     async (
       content: string,
       imageFile?: File | null,
-      overrideConversationId?: string
+      overrideConversationId?: string,
+      language?: string
     ): Promise<{ success: boolean; generatedTitle?: string }> => {
       const targetId = overrideConversationId ?? conversationId;
       if (!targetId) {
@@ -143,6 +145,7 @@ export function useMessages(conversationId: string | null): UseMessagesReturn {
         const result = await api.chat.sendMessage(targetId, {
           content: trimmed || 'Please analyze this attached image.',
           image_url: uploadedImageUrl,
+          language: language || 'en',
         });
 
         setMessages((prev) => {

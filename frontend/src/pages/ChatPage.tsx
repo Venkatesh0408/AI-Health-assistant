@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Bot, MessageSquare, PanelLeft } from 'lucide-react';
-import type { Conversation } from '../types';
+import { Bot, MessageSquare, PanelLeft, Volume2, VolumeX } from 'lucide-react';
+import clsx from 'clsx';
+import type { Conversation, SupportedLanguage } from '../types';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { ConversationList } from '../components/chat/ConversationList';
@@ -13,6 +14,8 @@ import { EmptyState } from '../components/common/EmptyState';
 import { ErrorMessage } from '../components/common/ErrorMessage';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 import { ErrorBoundary } from '../components/common/ErrorBoundary';
+import { DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from '../utils/languages';
+import { isSpeechSynthesisSupported, speakText, stopSpeaking } from '../utils/speech';
 
 export function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -34,7 +37,39 @@ export function ChatPage() {
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Multi-language & Voice preferences
+  const [selectedLanguage, setSelectedLanguage] = useState<SupportedLanguage>(() => {
+    const saved = localStorage.getItem('ai_health_lang');
+    if (saved) {
+      const match = SUPPORTED_LANGUAGES.find((l) => l.code === saved);
+      if (match) return match;
+    }
+    return DEFAULT_LANGUAGE;
+  });
+
+  const [autoSpeakReplies, setAutoSpeakReplies] = useState<boolean>(() => {
+    return localStorage.getItem('ai_health_auto_speak') === 'true';
+  });
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Save language preference
+  const handleLanguageChange = (lang: SupportedLanguage) => {
+    setSelectedLanguage(lang);
+    localStorage.setItem('ai_health_lang', lang.code);
+  };
+
+  // Toggle auto-speak
+  const handleToggleAutoSpeak = () => {
+    setAutoSpeakReplies((prev) => {
+      const next = !prev;
+      localStorage.setItem('ai_health_auto_speak', String(next));
+      if (!next) {
+        stopSpeaking();
+      }
+      return next;
+    });
+  };
 
   // Sync URL query param -> activeId
   useEffect(() => {
@@ -65,12 +100,14 @@ export function ChatPage() {
   }, [messages.length, sending]);
 
   const handleSelectConversation = (id: string) => {
+    stopSpeaking();
     setActiveId(id);
     setSearchParams({ conversation: id });
     setMobileListOpen(false);
   };
 
   const handleCreateConversation = async () => {
+    stopSpeaking();
     const created = await createConversation();
     if (created) {
       handleSelectConversation(created.id);
@@ -100,15 +137,16 @@ export function ChatPage() {
     }
   };
 
-  const handleSend = async (content: string, imageFile?: File | null) => {
+  const handleSend = async (content: string, imageFile?: File | null, language?: string) => {
     let targetId = activeId;
+    const activeLang = language || selectedLanguage.code;
 
     // Auto-create a conversation if none is currently selected
     if (!targetId) {
       const autoTitle =
         content.trim().length > 48
           ? `${content.trim().slice(0, 48)}...`
-          : content.trim() || 'Image Consultation';
+          : content.trim() || 'Health Consultation';
       const created = await createConversation(autoTitle);
       if (!created) return;
       targetId = created.id;
@@ -116,11 +154,24 @@ export function ChatPage() {
       setSearchParams({ conversation: created.id }, { replace: true });
     }
 
-    const result = await sendMessage(content, imageFile, targetId);
+    const result = await sendMessage(content, imageFile, targetId, activeLang);
     if (result.success && result.generatedTitle && targetId) {
       updateLocalTitle(targetId, result.generatedTitle);
     }
+
+    // Auto-speak response if hands-free auto-speak is enabled
+    if (result.success && autoSpeakReplies && isSpeechSynthesisSupported()) {
+      // Find latest assistant reply in state after render or timeout
+      setTimeout(() => {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && lastMsg.role === 'assistant') {
+          speakText(lastMsg.content, { speechLang: selectedLanguage.speechCode });
+        }
+      }, 400);
+    }
   };
+
+  const isSpeechSupported = isSpeechSynthesisSupported();
 
   return (
     <div className="flex h-[calc(100vh-4rem)] overflow-hidden bg-white">
@@ -167,7 +218,7 @@ export function ChatPage() {
 
       {/* Main Chat Panel */}
       <div className="flex min-w-0 flex-1 flex-col bg-gray-50">
-        {/* Chat Sub-Header */}
+        {/* Chat Sub-Header with Language & Voice Auto-Play toggles */}
         <div className="flex items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <button
@@ -183,8 +234,46 @@ export function ChatPage() {
                 {conversation?.title || 'AI Health Assistant'}
               </h1>
               <p className="text-xs text-gray-500">
-                Confidential AI health consultation
+                Multi-lingual Voice & Text Health Consultation
               </p>
+            </div>
+          </div>
+
+          {/* Quick controls: Active Language indicator + Auto-speak toggle */}
+          <div className="flex items-center gap-2">
+            {isSpeechSupported && (
+              <button
+                type="button"
+                onClick={handleToggleAutoSpeak}
+                title={
+                  autoSpeakReplies
+                    ? 'Auto-speak replies: ON (Click to mute)'
+                    : 'Auto-speak replies: OFF (Click to hear AI replies automatically)'
+                }
+                className={clsx(
+                  'flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors',
+                  autoSpeakReplies
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                    : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+                )}
+              >
+                {autoSpeakReplies ? (
+                  <>
+                    <Volume2 className="h-3.5 w-3.5 text-emerald-600 animate-pulse" />
+                    <span className="hidden sm:inline">Voice: Auto-On</span>
+                  </>
+                ) : (
+                  <>
+                    <VolumeX className="h-3.5 w-3.5 text-gray-400" />
+                    <span className="hidden sm:inline">Voice: Off</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            <div className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-800">
+              <span>{selectedLanguage.flag}</span>
+              <span>{selectedLanguage.nativeName}</span>
             </div>
           </div>
         </div>
@@ -219,7 +308,7 @@ export function ChatPage() {
               <EmptyState
                 icon={<MessageSquare className="h-6 w-6" />}
                 title="Start your first health consultation"
-                description="Ask about symptoms, medications, lab reports, or attach a medical photo. Your conversations are saved privately so you can generate reports later."
+                description="Ask about symptoms, medications, or speak into your microphone in any language. Your conversations are saved privately."
                 actionLabel="Start New Chat"
                 onAction={() => void handleCreateConversation()}
               />
@@ -229,12 +318,38 @@ export function ChatPage() {
                   <Bot className="h-6 w-6" aria-hidden="true" />
                 </div>
                 <h2 className="text-base font-semibold text-gray-900">
-                  How can I help with your health today?
+                  {selectedLanguage.code === 'hi'
+                    ? 'मैं आज आपके स्वास्थ्य में कैसे मदद कर सकता हूँ?'
+                    : selectedLanguage.code === 'ta'
+                    ? 'இன்று உங்கள் உடல்நலத்திற்கு நான் எவ்வாறு உதவ முடியும்?'
+                    : selectedLanguage.code === 'te'
+                    ? 'నేను ఈ రోజు మీ ఆరోగ్యానికి ఎలా సహాయపడగలను?'
+                    : 'How can I help with your health today?'}
                 </h2>
                 <p className="mx-auto mt-1 max-w-md text-sm text-gray-600">
-                  Describe your symptoms, how long they have lasted, or attach a clear
-                  photo for multimodal analysis.
+                  Type or click the microphone to speak in{' '}
+                  <span className="font-semibold text-gray-800">
+                    {selectedLanguage.name} ({selectedLanguage.nativeName})
+                  </span>
+                  .
                 </p>
+                <div className="mt-4 flex flex-wrap justify-center gap-2">
+                  {SUPPORTED_LANGUAGES.slice(0, 6).map((lang) => (
+                    <button
+                      key={lang.code}
+                      type="button"
+                      onClick={() => handleLanguageChange(lang)}
+                      className={clsx(
+                        'rounded-full border px-3 py-1 text-xs transition-colors',
+                        selectedLanguage.code === lang.code
+                          ? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+                          : 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100'
+                      )}
+                    >
+                      {lang.flag} {lang.nativeName}
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : (
               messages.map((message) => (
@@ -256,7 +371,9 @@ export function ChatPage() {
                   className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600"
                 >
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-200 border-t-emerald-600" />
-                  <span>Analyzing your message...</span>
+                  <span>
+                    Responding in {selectedLanguage.flag} {selectedLanguage.name}...
+                  </span>
                 </div>
               </div>
             )}
@@ -265,9 +382,14 @@ export function ChatPage() {
           </div>
         </div>
 
-        {/* Message Input Bar */}
+        {/* Message Input Bar with Voice & Multi-language Selection */}
         <div className="mx-auto w-full max-w-4xl">
-          <MessageInput onSend={handleSend} disabled={sending} />
+          <MessageInput
+            onSend={handleSend}
+            disabled={sending}
+            selectedLanguage={selectedLanguage}
+            onLanguageChange={handleLanguageChange}
+          />
         </div>
       </div>
 

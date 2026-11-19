@@ -149,6 +149,7 @@ class HealthQueryEngine:
         conversation_history: Optional[list[dict[str, Any]]] = None,
         user_profile: Optional[dict[str, Any]] = None,
         image_url: Optional[str] = None,
+        language: Optional[str] = "en",
     ) -> HealthQueryResult:
         """Execute all 10 steps and return a validated HealthQueryResult."""
         # Step 1: Parse user concern
@@ -202,6 +203,7 @@ class HealthQueryEngine:
             detected_symptoms=detected_symptoms,
             needs_followup=needs_followup,
             has_previous_interaction=bool(previous_interaction_id),
+            language=language,
         )
         if image_url:
             prompt += (
