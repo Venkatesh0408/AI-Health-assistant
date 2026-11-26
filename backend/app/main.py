@@ -15,7 +15,11 @@ from app.middleware.rate_limit import limiter, rate_limit_exceeded_handler
 from app.middleware.security import SecurityHeadersMiddleware
 from app.routers import auth, chat, health, images, privacy, reports, users, voice
 from app.services.image_service import ImageServiceError
-from app.services.supabase_service import SupabaseServiceError
+from app.services.supabase_service import (
+    SupabaseServiceError,
+    begin_supabase_request_scope,
+    end_supabase_request_scope,
+)
 
 logging.basicConfig(
     level=logging.INFO if not settings.is_production else logging.WARNING,
@@ -43,8 +47,31 @@ def create_app() -> FastAPI:
     application.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
     application.add_middleware(SlowAPIMiddleware)
 
-    # Security headers & CORS
+    # Security headers & inner exception/scope shield so CORS headers are always preserved
     application.add_middleware(SecurityHeadersMiddleware)
+
+    @application.middleware("http")
+    async def request_scope_and_error_shield(request: Request, call_next):  # type: ignore[no-untyped-def]
+        scope_token = begin_supabase_request_scope()
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            logger.error("Unhandled server error (%s) on %s", type(exc).__name__, request.url.path)
+            detail = (
+                "An internal server error occurred. Please try again later."
+                if settings.is_production
+                else f"Internal server error ({type(exc).__name__})."
+            )
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={
+                    "detail": detail,
+                    "status_code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+                },
+            )
+        finally:
+            end_supabase_request_scope(scope_token)
+
     configure_cors(application)
 
     # Structured exception handlers (never expose stack traces in production)

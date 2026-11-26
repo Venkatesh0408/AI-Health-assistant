@@ -127,3 +127,40 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('health-reports', 'health-reports', false)
 ON CONFLICT (id) DO NOTHING;
+
+-- Storage Object RLS Policies (user-scoped folders: <user_id>/<filename>)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'Users can view own health storage files'
+    ) THEN
+        CREATE POLICY "Users can view own health storage files"
+        ON storage.objects FOR SELECT TO authenticated
+        USING (bucket_id IN ('health-images', 'health-reports') AND (storage.foldername(name))[1] = (auth.uid())::text);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'Users can upload own health storage files'
+    ) THEN
+        CREATE POLICY "Users can upload own health storage files"
+        ON storage.objects FOR INSERT TO authenticated
+        WITH CHECK (bucket_id IN ('health-images', 'health-reports') AND (storage.foldername(name))[1] = (auth.uid())::text);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'Users can update own health storage files'
+    ) THEN
+        CREATE POLICY "Users can update own health storage files"
+        ON storage.objects FOR UPDATE TO authenticated
+        USING (bucket_id IN ('health-images', 'health-reports') AND (storage.foldername(name))[1] = (auth.uid())::text)
+        WITH CHECK (bucket_id IN ('health-images', 'health-reports') AND (storage.foldername(name))[1] = (auth.uid())::text);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'Users can delete own health storage files'
+    ) THEN
+        CREATE POLICY "Users can delete own health storage files"
+        ON storage.objects FOR DELETE TO authenticated
+        USING (bucket_id IN ('health-images', 'health-reports') AND (storage.foldername(name))[1] = (auth.uid())::text);
+    END IF;
+END $$;

@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { Session, User as SupabaseUser } from '@supabase/supabase-js';
 import { supabase } from '../services/supabase';
-import { setAuthToken } from '../services/api';
+import { api, setAuthToken } from '../services/api';
 import type { User } from '../types';
 
 interface AuthActionResult {
@@ -59,6 +59,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSession(currentSession);
         setUser(mapSupabaseUser(currentSession?.user ?? null));
         setAuthToken(currentSession?.access_token ?? null);
+        if (currentSession?.access_token) {
+          void api.wakeUp();
+        }
       } catch {
         if (!isMounted) return;
         setSession(null);
@@ -79,6 +82,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setSession(nextSession);
         setUser(mapSupabaseUser(nextSession?.user ?? null));
         setAuthToken(nextSession?.access_token ?? null);
+        if (nextSession?.access_token) {
+          void api.wakeUp();
+        }
         setLoading(false);
       }
     );

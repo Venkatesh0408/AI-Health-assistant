@@ -103,15 +103,35 @@ async def list_image_analyses(
     """List the authenticated user's past image analyses."""
     try:
         rows = supabase_service.list_image_analyses(user_id=current_user.user_id)
-        items = [
-            ImageAnalysisResponse(
-                **{
-                    **row,
-                    "image_url": row.get("image_url") or row.get("image_path", ""),
-                }
+        items: list[ImageAnalysisResponse] = []
+        sign_marker = f"/storage/v1/object/sign/{settings.SUPABASE_IMAGES_BUCKET}/"
+        for row in rows:
+            raw_path = str(row.get("image_path") or "")
+            resolved_url = str(row.get("image_url") or raw_path)
+            storage_rel_path: str | None = None
+            if raw_path.startswith(f"{current_user.user_id}/"):
+                storage_rel_path = raw_path
+            elif sign_marker in raw_path:
+                candidate = raw_path.split(sign_marker, 1)[1].split("?", 1)[0]
+                if candidate.startswith(f"{current_user.user_id}/"):
+                    storage_rel_path = candidate
+
+            if storage_rel_path:
+                try:
+                    resolved_url = supabase_service.get_file_url(
+                        settings.SUPABASE_IMAGES_BUCKET, storage_rel_path
+                    )
+                except Exception:
+                    pass
+
+            items.append(
+                ImageAnalysisResponse(
+                    **{
+                        **row,
+                        "image_url": resolved_url,
+                    }
+                )
             )
-            for row in rows
-        ]
         return ImageAnalysisListResponse(analyses=items, total=len(items))
     except SupabaseServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

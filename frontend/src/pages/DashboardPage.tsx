@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { api } from '../services/api';
 import { useConversations } from '../hooks/useConversations';
 import { useHealthRecords } from '../hooks/useHealthRecords';
 import { formatDateTime, formatRelativeTime } from '../utils/formatDate';
@@ -52,6 +53,10 @@ export function DashboardPage() {
   } = useHealthRecords('vital_signs', { fetchSummary: true });
 
   const [vitalsModalOpen, setVitalsModalOpen] = useState(false);
+
+  useEffect(() => {
+    void api.wakeUp();
+  }, []);
 
   const displayName =
     user?.display_name || user?.email?.split('@')[0] || 'there';

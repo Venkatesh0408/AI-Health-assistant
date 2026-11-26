@@ -152,7 +152,7 @@ async def send_message(
 
         # Auto-title new conversations from the first user message
         updated_title: Optional[str] = conv.get("title")
-        if conv.get("title") == "New Conversation" and not history:
+        if conv.get("title") in ("New Conversation", "New Health Consultation") and not history:
             auto_title = payload.content[:60].strip()
             if len(payload.content) > 60:
                 auto_title += "..."

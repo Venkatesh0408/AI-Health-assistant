@@ -3,4 +3,4 @@ User-agent: *
 Allow: /
 
 # Sitemaps
-Sitemap: https://ai-health-assistant-85q.pages.dev/sitemap.xml
+Sitemap: https://ai-health-assistant-iota.vercel.app/sitemap.xml

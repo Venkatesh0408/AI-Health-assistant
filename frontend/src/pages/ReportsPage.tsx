@@ -56,6 +56,7 @@ export function ReportsPage() {
   }, []);
 
   useEffect(() => {
+    void api.wakeUp();
     void loadReports();
   }, [loadReports]);
 

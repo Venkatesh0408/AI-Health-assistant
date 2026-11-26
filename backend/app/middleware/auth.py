@@ -1,7 +1,8 @@
 """Authentication dependency verifying Supabase JWTs from the Authorization header."""
 
+from contextvars import ContextVar, Token
 import logging
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -13,6 +14,24 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+_request_access_token: ContextVar[Optional[str]] = ContextVar(
+    "request_access_token", default=None
+)
+
+
+def set_request_access_token(token: Optional[str]) -> Token[Optional[str]]:
+    """Bind the current request's validated Supabase JWT to the async context."""
+    return _request_access_token.set(token)
+
+
+def reset_request_access_token(reset_token: Token[Optional[str]]) -> None:
+    """Restore the previous request access token in the async context."""
+    _request_access_token.reset(reset_token)
+
+
+def get_request_access_token() -> Optional[str]:
+    """Return the validated Supabase JWT for the active request context, if any."""
+    return _request_access_token.get()
 
 
 class CurrentUser(BaseModel):
@@ -104,15 +123,20 @@ def verify_access_token(token: str) -> CurrentUser:
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
-) -> CurrentUser:
-    """FastAPI dependency requiring a valid Bearer JWT and returning the authenticated user."""
+) -> AsyncIterator[CurrentUser]:
+    """FastAPI dependency requiring a valid Bearer JWT and scoping downstream DB access."""
     if credentials is None or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required. Provide a valid Bearer token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return verify_access_token(credentials.credentials)
+    user = verify_access_token(credentials.credentials)
+    reset_token = set_request_access_token(user.access_token)
+    try:
+        yield user
+    finally:
+        reset_request_access_token(reset_token)
 
 
 async def get_optional_user(

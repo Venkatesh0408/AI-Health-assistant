@@ -217,6 +217,28 @@ class HealthQueryEngine:
             previous_interaction_id=previous_interaction_id,
         )
 
+        # Retry without stale interaction_id if a chained interaction failed
+        if ai_result.is_fallback and previous_interaction_id:
+            logger.info("Retrying health query without previous_interaction_id")
+            fallback_prompt = self._prompt_builder.build_health_query_prompt(
+                user_message=parsed_message,
+                conversation_history=conversation_history,
+                user_profile=user_profile,
+                detected_symptoms=detected_symptoms,
+                needs_followup=needs_followup,
+                has_previous_interaction=False,
+                language=language,
+            )
+            if image_url:
+                fallback_prompt += (
+                    "\n\nNote: The user also attached a reference image to this message. "
+                    "For visual inspection of images, remind them they can use the dedicated Image Analysis tool."
+                )
+            ai_result = self._ai.generate_health_response(
+                prompt=fallback_prompt,
+                previous_interaction_id=None,
+            )
+
         # Step 7: Parse structured response sections
         sections = ai_result.sections or self._ai.parse_structured_sections(ai_result.text)
 

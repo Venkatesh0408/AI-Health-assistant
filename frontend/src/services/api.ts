@@ -23,6 +23,9 @@ const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || 'https://ai-health-assistant-a5g8.onrender.com/api'
 ).replace(/\/+$/, '');
 const TOKEN_STORAGE_KEY = 'ai_health_access_token';
+const WAKEUP_COOLDOWN_MS = 90_000;
+let lastWakeupAt = 0;
+let inflightWakeup: Promise<boolean> | null = null;
 
 export class ApiClientError extends Error implements ApiError {
   public readonly detail: string;
@@ -140,7 +143,7 @@ async function request<T>(
     requiresAuth = true,
     responseType = 'json',
     signal,
-    timeoutMs = 8000,
+    timeoutMs = 25000,
   } = options;
 
   const headers = new Headers();
@@ -179,17 +182,27 @@ async function request<T>(
     });
   } catch (err: unknown) {
     clearTimeout(timeoutId);
-    if (controller.signal.aborted) {
+    const isTimeoutAbort =
+      controller.signal.aborted &&
+      (!signal || !signal.aborted);
+
+    // Retry safe idempotent GET requests once on cold-start transient failures
+    if (method === 'GET' && !hasRetried && (!signal || !signal.aborted)) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return request<T>(endpoint, options, true);
+    }
+
+    if (isTimeoutAbort) {
       throw new ApiClientError(
-        'Request timed out. The backend service may still be starting up.',
+        'Request timed out while waiting for the backend server (it may be waking from sleep). Please try again in a few seconds.',
         408
       );
     }
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    if ((err instanceof DOMException && err.name === 'AbortError') || signal?.aborted) {
       throw new ApiClientError('Request was cancelled.', 0);
     }
     throw new ApiClientError(
-      'Unable to reach backend server. Please check connection or backend URL.',
+      'Unable to reach the backend server. Please verify your internet connection or try again in a few seconds while the server wakes up.',
       0
     );
   } finally {
@@ -201,6 +214,11 @@ async function request<T>(
     if (newToken) {
       return request<T>(endpoint, options, true);
     }
+  }
+
+  if ((response.status === 502 || response.status === 503) && method === 'GET' && !hasRetried) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return request<T>(endpoint, options, true);
   }
 
   if (!response.ok) {
@@ -274,6 +292,38 @@ function extractEmergencyInfo(
 }
 
 export const api = {
+  /**
+   * Silently ping /health so free-tier Render containers wake up before the user sends a prompt.
+   */
+  async wakeUp(force = false): Promise<boolean> {
+    const now = Date.now();
+    if (!force && now - lastWakeupAt < WAKEUP_COOLDOWN_MS) {
+      return true;
+    }
+    if (inflightWakeup) {
+      return inflightWakeup;
+    }
+    lastWakeupAt = now;
+    inflightWakeup = (async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 55000);
+      try {
+        const res = await fetch(`${API_BASE_URL}/health`, {
+          method: 'GET',
+          signal: controller.signal,
+          keepalive: true,
+        });
+        return res.ok;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(timer);
+        inflightWakeup = null;
+      }
+    })();
+    return inflightWakeup;
+  },
+
   auth: {
     async register(payload: {
       email: string;
@@ -379,6 +429,7 @@ export const api = {
             .from('conversations')
             .select('*')
             .eq('user_id', authData.user.id)
+            .neq('status', 'deleted')
             .order('updated_at', { ascending: false });
 
           if (params?.limit !== undefined) {
@@ -421,6 +472,7 @@ export const api = {
           .from('conversations')
           .select('*')
           .eq('id', id)
+          .neq('status', 'deleted')
           .single();
 
         if (!convErr && conv) {
@@ -451,65 +503,57 @@ export const api = {
       conversationId: string,
       payload: { content: string; image_url?: string; language?: string }
     ): Promise<SendMessageResponse> {
-      try {
-        const raw = await request<Record<string, unknown>>(
-          `/chat/conversations/${encodeURIComponent(conversationId)}/messages`,
-          {
-            method: 'POST',
-            body: payload,
-            timeoutMs: 25000, // 25s for AI inference
-          }
-        );
-
-        const assistantMessage =
-          (raw.assistant_message as Message | undefined) ||
-          (raw.ai_message as Message | undefined) ||
-          (raw.response as Message | undefined) ||
-          (raw.message && typeof raw.message === 'object'
-            ? (raw.message as Message)
-            : undefined) ||
-          (typeof raw.content === 'string' ? (raw as unknown as Message) : undefined);
-
-        if (!assistantMessage) {
-          throw new ApiClientError('Invalid response received from AI service.', 500);
+      const raw = await request<Record<string, unknown>>(
+        `/chat/conversations/${encodeURIComponent(conversationId)}/messages`,
+        {
+          method: 'POST',
+          body: payload,
+          timeoutMs: 65000, // 65s for Render cold-start + AI inference
         }
+      );
 
-        const userMessage = raw.user_message as Message | undefined;
-        const emergency = extractEmergencyInfo(raw, assistantMessage);
-        const conversationTitle =
-          typeof raw.conversation_title === 'string'
-            ? raw.conversation_title
-            : typeof raw.title === 'string'
-            ? raw.title
-            : undefined;
+      const assistantMessage =
+        (raw.assistant_message as Message | undefined) ||
+        (raw.ai_message as Message | undefined) ||
+        (raw.response as Message | undefined) ||
+        (raw.message && typeof raw.message === 'object'
+          ? (raw.message as Message)
+          : undefined) ||
+        (typeof raw.content === 'string' ? (raw as unknown as Message) : undefined);
 
-        return {
-          user_message: userMessage,
-          assistant_message: assistantMessage,
-          emergency,
-          conversation_title: conversationTitle,
-        };
-      } catch (err) {
-        // Save user message to Supabase so it's not lost
-        try {
-          await supabase.from('messages').insert({
-            conversation_id: conversationId,
-            role: 'user',
-            content: payload.content,
-            image_url: payload.image_url,
-            language: payload.language || 'en',
-          });
-        } catch {
-          // ignore
-        }
-        throw err;
+      if (!assistantMessage) {
+        throw new ApiClientError('Invalid response received from AI service.', 500);
       }
+
+      const userMessage = raw.user_message as Message | undefined;
+      const emergency = extractEmergencyInfo(raw, assistantMessage);
+      const conversationTitle =
+        typeof raw.conversation_title === 'string'
+          ? raw.conversation_title
+          : typeof raw.title === 'string'
+          ? raw.title
+          : undefined;
+
+      return {
+        user_message: userMessage,
+        assistant_message: assistantMessage,
+        emergency,
+        conversation_title: conversationTitle,
+      };
     },
 
     async deleteConversation(id: string): Promise<void> {
       try {
-        await supabase.from('conversations').delete().eq('id', id);
-        return;
+        const { error } = await supabase
+          .from('conversations')
+          .update({
+            status: 'deleted',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', id);
+        if (!error) {
+          return;
+        }
       } catch {
         // Fallback to backend API
       }
@@ -528,7 +572,7 @@ export const api = {
         method: 'POST',
         body: formData,
         isFormData: true,
-        timeoutMs: 15000,
+        timeoutMs: 45000,
       });
 
       const imageUrl =
@@ -553,7 +597,7 @@ export const api = {
       return request<ImageAnalysis>('/images/analyze', {
         method: 'POST',
         body: payload,
-        timeoutMs: 25000,
+        timeoutMs: 65000,
       });
     },
 
@@ -568,7 +612,31 @@ export const api = {
             .order('created_at', { ascending: false });
 
           if (!error && Array.isArray(data)) {
-            return data as ImageAnalysis[];
+            const signMarker = '/storage/v1/object/sign/health-images/';
+            const enriched = await Promise.all(
+              (data as ImageAnalysis[]).map(async (item) => {
+                const rawPath = item.image_path || '';
+                let relPath: string | null = null;
+                if (rawPath.startsWith(`${authData.user!.id}/`)) {
+                  relPath = rawPath;
+                } else if (rawPath.includes(signMarker)) {
+                  const candidate = rawPath.split(signMarker, 2)[1].split('?', 1)[0];
+                  if (candidate.startsWith(`${authData.user!.id}/`)) {
+                    relPath = candidate;
+                  }
+                }
+                if (relPath) {
+                  const { data: signed } = await supabase.storage
+                    .from('health-images')
+                    .createSignedUrl(relPath, 3600);
+                  if (signed?.signedUrl) {
+                    return { ...item, image_url: signed.signedUrl };
+                  }
+                }
+                return { ...item, image_url: item.image_url || item.image_path };
+              })
+            );
+            return enriched;
           }
         }
       } catch {
@@ -643,6 +711,7 @@ export const api = {
 
     async getSummary(): Promise<HealthSummary> {
       // 1. Check existing records in Supabase directly
+      let cachedRecords: HealthRecord[] = [];
       try {
         const { data: authData } = await supabase.auth.getUser();
         if (authData.user) {
@@ -651,11 +720,11 @@ export const api = {
             .select('*')
             .eq('user_id', authData.user.id)
             .order('recorded_at', { ascending: false })
-            .limit(10);
+            .limit(20);
 
           if (!error) {
-            const count = records?.length || 0;
-            if (count === 0) {
+            cachedRecords = (records as HealthRecord[]) || [];
+            if (cachedRecords.length === 0) {
               // Return instant empty summary for fresh users
               return {
                 summary:
@@ -675,10 +744,10 @@ export const api = {
         // Continue
       }
 
-      // 2. If records exist, try backend AI summary with short timeout
+      // 2. If records exist, try backend AI summary with generous timeout
       try {
         const raw = await request<Record<string, unknown>>('/health/summary', {
-          timeoutMs: 6000,
+          timeoutMs: 35000,
         });
         return {
           summary:
@@ -688,7 +757,7 @@ export const api = {
               ? raw.message
               : '',
           record_count:
-            typeof raw.record_count === 'number' ? raw.record_count : undefined,
+            typeof raw.record_count === 'number' ? raw.record_count : cachedRecords.length,
           generated_at:
             typeof raw.generated_at === 'string' ? raw.generated_at : undefined,
           highlights: Array.isArray(raw.highlights)
@@ -702,12 +771,18 @@ export const api = {
         };
       } catch {
         // 3. Graceful fallback from client records
+        const categories = Array.from(
+          new Set(cachedRecords.map((r) => r.record_type.replace(/_/g, ' ')))
+        );
         return {
           summary:
-            'Your recent vital signs and health history are securely logged. Consult a qualified medical practitioner for clinical evaluation.',
-          record_count: 1,
+            `You have ${cachedRecords.length || 1} recent health record(s) securely logged. Consult a qualified medical practitioner for clinical evaluation.`,
+          record_count: cachedRecords.length || 1,
           generated_at: new Date().toISOString(),
-          highlights: ['Health metrics recorded in Supabase'],
+          highlights:
+            categories.length > 0
+              ? [`Categories logged: ${categories.join(', ')}`]
+              : ['Health metrics recorded in Supabase'],
           recommendations: ['Review your recorded trends with your doctor during your next appointment.'],
         };
       }
@@ -719,7 +794,7 @@ export const api = {
       return request<HealthReport>('/reports/generate', {
         method: 'POST',
         body: payload,
-        timeoutMs: 20000,
+        timeoutMs: 60000,
       });
     },
 
@@ -731,7 +806,7 @@ export const api = {
             .from('health_reports')
             .select('*')
             .eq('user_id', authData.user.id)
-            .order('created_at', { ascending: false });
+            .order('generated_at', { ascending: false });
 
           if (!error && Array.isArray(data)) {
             return data as HealthReport[];
@@ -749,7 +824,7 @@ export const api = {
       return request<Blob>(`/reports/${encodeURIComponent(id)}/download`, {
         method: 'GET',
         responseType: 'blob',
-        timeoutMs: 20000,
+        timeoutMs: 45000,
       });
     },
   },
@@ -792,11 +867,14 @@ export const api = {
         if (authData.user) {
           const { data, error } = await supabase
             .from('user_profiles')
-            .upsert({
-              user_id: authData.user.id,
-              ...payload,
-              updated_at: new Date().toISOString(),
-            })
+            .upsert(
+              {
+                user_id: authData.user.id,
+                ...payload,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: 'user_id' }
+            )
             .select()
             .single();
 
@@ -859,11 +937,14 @@ export const api = {
         if (authData.user) {
           const { data, error } = await supabase
             .from('privacy_settings')
-            .upsert({
-              user_id: authData.user.id,
-              ...payload,
-              consent_updated_at: new Date().toISOString(),
-            })
+            .upsert(
+              {
+                user_id: authData.user.id,
+                ...payload,
+                consent_updated_at: new Date().toISOString(),
+              },
+              { onConflict: 'user_id' }
+            )
             .select()
             .single();
 
@@ -898,7 +979,7 @@ export const api = {
         description: string;
       }>;
     }> {
-      return request('/voice/status', { requiresAuth: false, timeoutMs: 5000 });
+      return request('/voice/status', { requiresAuth: false, timeoutMs: 25000 });
     },
 
     async synthesize(text: string, voiceId?: string): Promise<Blob> {
@@ -907,7 +988,7 @@ export const api = {
         body: { text, voice_id: voiceId },
         responseType: 'blob',
         requiresAuth: false,
-        timeoutMs: 12000,
+        timeoutMs: 30000,
       });
     },
   },

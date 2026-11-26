@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Bot, MessageSquare, PanelLeft, Volume2, VolumeX } from 'lucide-react';
 import clsx from 'clsx';
 import type { Conversation, SupportedLanguage } from '../types';
+import { api } from '../services/api';
 import { useConversations } from '../hooks/useConversations';
 import { useMessages } from '../hooks/useMessages';
 import { ConversationList } from '../components/chat/ConversationList';
@@ -52,6 +53,17 @@ export function ChatPage() {
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const failedMessageRef = useRef<{
+    content: string;
+    imageFile?: File | null;
+    language?: string;
+  } | null>(null);
+  const [slowWait, setSlowWait] = useState(false);
+
+  // Proactively wake up the backend server when entering Chat
+  useEffect(() => {
+    void api.wakeUp();
+  }, []);
 
   // Save language preference
   const handleLanguageChange = (lang: SupportedLanguage) => {
@@ -98,6 +110,16 @@ export function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, sending]);
+
+  // Show cold-start hint if a response takes longer than 5 seconds
+  useEffect(() => {
+    if (!sending) {
+      setSlowWait(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlowWait(true), 5000);
+    return () => clearTimeout(timer);
+  }, [sending]);
 
   const handleSelectConversation = (id: string) => {
     stopSpeaking();
@@ -148,26 +170,42 @@ export function ChatPage() {
           ? `${content.trim().slice(0, 48)}...`
           : content.trim() || 'Health Consultation';
       const created = await createConversation(autoTitle);
-      if (!created) return;
+      if (!created) {
+        failedMessageRef.current = { content, imageFile, language: activeLang };
+        return;
+      }
       targetId = created.id;
       setActiveId(created.id);
       setSearchParams({ conversation: created.id }, { replace: true });
     }
 
     const result = await sendMessage(content, imageFile, targetId, activeLang);
-    if (result.success && result.generatedTitle && targetId) {
+    if (!result.success) {
+      failedMessageRef.current = { content, imageFile, language: activeLang };
+      return;
+    }
+
+    failedMessageRef.current = null;
+
+    if (result.generatedTitle && targetId) {
       updateLocalTitle(targetId, result.generatedTitle);
     }
 
-    // Auto-speak response if hands-free auto-speak is enabled
-    if (result.success && autoSpeakReplies && isSpeechSynthesisSupported()) {
-      // Find latest assistant reply in state after render or timeout
-      setTimeout(() => {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg && lastMsg.role === 'assistant') {
-          speakText(lastMsg.content, { speechLang: selectedLanguage.speechCode });
-        }
-      }, 400);
+    // Auto-speak response using the actual newly received assistant message
+    if (autoSpeakReplies && isSpeechSynthesisSupported() && result.assistantMessage) {
+      speakText(result.assistantMessage.content, {
+        speechLang: selectedLanguage.speechCode,
+      });
+    }
+  };
+
+  const handleRetryFailedOrRefresh = async () => {
+    const failed = failedMessageRef.current;
+    if (failed) {
+      failedMessageRef.current = null;
+      await handleSend(failed.content, failed.imageFile, failed.language);
+    } else {
+      await refreshMessages();
     }
   };
 
@@ -298,7 +336,7 @@ export function ChatPage() {
               <ErrorMessage
                 title="Message error"
                 message={msgError}
-                onRetry={() => void refreshMessages()}
+                onRetry={() => void handleRetryFailedOrRefresh()}
               />
             )}
 
@@ -372,7 +410,9 @@ export function ChatPage() {
                 >
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-200 border-t-emerald-600" />
                   <span>
-                    Responding in {selectedLanguage.flag} {selectedLanguage.name}...
+                    {slowWait
+                      ? `Waking AI service & generating response in ${selectedLanguage.flag} ${selectedLanguage.name}...`
+                      : `Responding in ${selectedLanguage.flag} ${selectedLanguage.name}...`}
                   </span>
                 </div>
               </div>

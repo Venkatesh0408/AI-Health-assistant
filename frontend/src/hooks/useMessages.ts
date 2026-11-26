@@ -16,7 +16,7 @@ export interface UseMessagesReturn {
     imageFile?: File | null,
     overrideConversationId?: string,
     language?: string
-  ) => Promise<{ success: boolean; generatedTitle?: string }>;
+  ) => Promise<{ success: boolean; generatedTitle?: string; assistantMessage?: Message }>;
 }
 
 function generateTitleFromMessage(content: string): string {
@@ -102,7 +102,7 @@ export function useMessages(conversationId: string | null): UseMessagesReturn {
       imageFile?: File | null,
       overrideConversationId?: string,
       language?: string
-    ): Promise<{ success: boolean; generatedTitle?: string }> => {
+    ): Promise<{ success: boolean; generatedTitle?: string; assistantMessage?: Message }> => {
       const targetId = overrideConversationId ?? conversationId;
       if (!targetId) {
         return { success: false };
@@ -172,7 +172,11 @@ export function useMessages(conversationId: string | null): UseMessagesReturn {
           );
         }
 
-        return { success: true, generatedTitle };
+        return {
+          success: true,
+          generatedTitle,
+          assistantMessage: result.assistant_message,
+        };
       } catch (err) {
         setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
         const msg =

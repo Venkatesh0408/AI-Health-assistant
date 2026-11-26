@@ -9,6 +9,8 @@ from app.config import settings
 DEFAULT_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
     "https://ai-health-assistant-iota.vercel.app",
     "https://ai-health-assistant-85q.pages.dev",
 ]
@@ -31,7 +33,7 @@ def configure_cors(app: FastAPI) -> None:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=get_allowed_origins(),
-        allow_origin_regex=r"^https:\/\/(?:[a-zA-Z0-9-]+\.)*(?:vercel\.app|pages\.dev|onrender\.com)$",
+        allow_origin_regex=r"^(?:https:\/\/(?:[a-zA-Z0-9-]+\.)*(?:vercel\.app|pages\.dev|onrender\.com)|http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?)$",
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],

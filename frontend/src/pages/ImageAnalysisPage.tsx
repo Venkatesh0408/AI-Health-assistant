@@ -48,6 +48,7 @@ export function ImageAnalysisPage() {
   }, []);
 
   useEffect(() => {
+    void api.wakeUp();
     void loadAnalyses();
   }, [loadAnalyses]);
 
