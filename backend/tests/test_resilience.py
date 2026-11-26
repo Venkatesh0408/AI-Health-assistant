@@ -113,3 +113,29 @@ class TestChatAutoTitleForFrontendDefault:
         assert resp.status_code == 201
         assert resp.json()["conversation_title"] == "Persistent sore throat since yesterday"
         mock_title.assert_called()
+
+
+class TestAIModelCascade:
+    def test_falls_back_to_next_model_when_primary_raises(self) -> None:
+        from types import SimpleNamespace
+        from app.services.ai_service import AIService
+
+        svc = AIService(api_key="fake-key", model="gemini-4-hydrogen")
+        fake_client = MagicMock()
+
+        def side_effect(**kwargs):
+            if kwargs["model"] == "gemini-4-hydrogen":
+                raise RuntimeError("429 Rate limit exceeded")
+            return SimpleNamespace(
+                id="inter_fallback_1",
+                output_text="### Understanding Your Concern\nRest well.\n\n---\n*Not a medical diagnosis.*",
+            )
+
+        fake_client.interactions.create.side_effect = side_effect
+        svc._client = fake_client
+
+        res = svc.generate_health_response("I have a mild cough")
+        assert res.is_fallback is False
+        assert res.model == "gemini-3.5-flash-lite"
+        assert res.interaction_id == "inter_fallback_1"
+        assert fake_client.interactions.create.call_count == 2

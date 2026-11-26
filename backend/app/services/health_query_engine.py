@@ -57,6 +57,7 @@ class HealthQueryResult:
     needs_followup: bool = False
     prompt_injection_blocked: bool = False
     is_fallback: bool = False
+    model: Optional[str] = None
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -64,6 +65,7 @@ class HealthQueryResult:
             "emergency_category": self.emergency.category,
             "emergency_severity": self.emergency.severity,
             "interaction_id": self.interaction_id,
+            "ai_model": self.model,
             "detected_symptoms": self.detected_symptoms,
             "sections": list(self.sections.keys()),
             "safety_flags": self.safety_flags,
@@ -130,18 +132,19 @@ class HealthQueryEngine:
         return screen_for_emergency(message)
 
     @staticmethod
-    def _find_previous_interaction_id(
+    def _find_previous_interaction_info(
         history: Optional[list[dict[str, Any]]],
-    ) -> Optional[str]:
-        """Retrieve the latest Gemini interaction_id from prior assistant messages."""
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Retrieve the latest Gemini interaction_id and model from prior assistant messages."""
         if not history:
-            return None
+            return None, None
         for msg in reversed(history):
             if msg.get("role") == "assistant":
                 meta = msg.get("metadata") or {}
                 if isinstance(meta, dict) and meta.get("interaction_id"):
-                    return str(meta["interaction_id"])
-        return None
+                    model_val = meta.get("ai_model")
+                    return str(meta["interaction_id"]), str(model_val) if model_val else None
+        return None, None
 
     def process_query(
         self,
@@ -195,7 +198,9 @@ class HealthQueryEngine:
             )
 
         # Step 5: Build context from conversation history & user profile
-        previous_interaction_id = self._find_previous_interaction_id(conversation_history)
+        previous_interaction_id, previous_model = self._find_previous_interaction_info(
+            conversation_history
+        )
         prompt = self._prompt_builder.build_health_query_prompt(
             user_message=parsed_message,
             conversation_history=conversation_history,
@@ -205,21 +210,8 @@ class HealthQueryEngine:
             has_previous_interaction=bool(previous_interaction_id),
             language=language,
         )
-        if image_url:
-            prompt += (
-                "\n\nNote: The user also attached a reference image to this message. "
-                "For visual inspection of images, remind them they can use the dedicated Image Analysis tool."
-            )
-
-        # Step 6: Call AI with structured prompt (Gemini Interactions API)
-        ai_result = self._ai.generate_health_response(
-            prompt=prompt,
-            previous_interaction_id=previous_interaction_id,
-        )
-
-        # Retry without stale interaction_id if a chained interaction failed
-        if ai_result.is_fallback and previous_interaction_id:
-            logger.info("Retrying health query without previous_interaction_id")
+        fallback_prompt = prompt
+        if previous_interaction_id:
             fallback_prompt = self._prompt_builder.build_health_query_prompt(
                 user_message=parsed_message,
                 conversation_history=conversation_history,
@@ -229,15 +221,26 @@ class HealthQueryEngine:
                 has_previous_interaction=False,
                 language=language,
             )
-            if image_url:
-                fallback_prompt += (
-                    "\n\nNote: The user also attached a reference image to this message. "
-                    "For visual inspection of images, remind them they can use the dedicated Image Analysis tool."
-                )
-            ai_result = self._ai.generate_health_response(
-                prompt=fallback_prompt,
-                previous_interaction_id=None,
+
+        if image_url:
+            img_note = (
+                "\n\nNote: The user also attached a reference image to this message. "
+                "For visual inspection of images, remind them they can use the dedicated Image Analysis tool."
             )
+            prompt += img_note
+            if fallback_prompt is not prompt:
+                fallback_prompt += img_note
+
+        # Step 6: Call AI with structured prompt (Gemini Interactions API + automatic model fallback)
+        ai_kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "previous_interaction_id": previous_interaction_id,
+        }
+        if fallback_prompt is not prompt:
+            ai_kwargs["fallback_prompt"] = fallback_prompt
+        if previous_model:
+            ai_kwargs["preferred_model"] = previous_model
+        ai_result = self._ai.generate_health_response(**ai_kwargs)
 
         # Step 7: Parse structured response sections
         sections = ai_result.sections or self._ai.parse_structured_sections(ai_result.text)
@@ -260,6 +263,7 @@ class HealthQueryEngine:
             safety_flags=safety_result.flags,
             needs_followup=needs_followup,
             is_fallback=ai_result.is_fallback,
+            model=ai_result.model or None,
         )
 
 

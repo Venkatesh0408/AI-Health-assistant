@@ -54,6 +54,22 @@ export function setAuthToken(token: string | null): void {
   }
 }
 
+async function getSessionUser() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.user) {
+      if (data.session.access_token) {
+        cachedAccessToken = data.session.access_token;
+      }
+      return data.session.user;
+    }
+    const { data: userData } = await supabase.auth.getUser();
+    return userData.user ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function getAccessToken(): Promise<string | null> {
   if (cachedAccessToken) {
     return cachedAccessToken;
@@ -384,12 +400,12 @@ export const api = {
     async createConversation(title?: string): Promise<Conversation> {
       // 1. Direct Supabase create for instant sub-50ms speed
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           const { data, error } = await supabase
             .from('conversations')
             .insert({
-              user_id: authData.user.id,
+              user_id: sbUser.id,
               title: title || 'New Health Consultation',
             })
             .select()
@@ -423,12 +439,12 @@ export const api = {
     }): Promise<Conversation[]> {
       // 1. Direct Supabase query for instant sub-50ms speed
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           let query = supabase
             .from('conversations')
             .select('*')
-            .eq('user_id', authData.user.id)
+            .eq('user_id', sbUser.id)
             .neq('status', 'deleted')
             .order('updated_at', { ascending: false });
 
@@ -603,12 +619,12 @@ export const api = {
 
     async listAnalyses(): Promise<ImageAnalysis[]> {
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           const { data, error } = await supabase
             .from('image_analyses')
             .select('*')
-            .eq('user_id', authData.user.id)
+            .eq('user_id', sbUser.id)
             .order('created_at', { ascending: false });
 
           if (!error && Array.isArray(data)) {
@@ -617,11 +633,11 @@ export const api = {
               (data as ImageAnalysis[]).map(async (item) => {
                 const rawPath = item.image_path || '';
                 let relPath: string | null = null;
-                if (rawPath.startsWith(`${authData.user!.id}/`)) {
+                if (rawPath.startsWith(`${sbUser.id}/`)) {
                   relPath = rawPath;
                 } else if (rawPath.includes(signMarker)) {
                   const candidate = rawPath.split(signMarker, 2)[1].split('?', 1)[0];
-                  if (candidate.startsWith(`${authData.user!.id}/`)) {
+                  if (candidate.startsWith(`${sbUser.id}/`)) {
                     relPath = candidate;
                   }
                 }
@@ -652,12 +668,12 @@ export const api = {
     async getRecords(recordType?: HealthRecordType): Promise<HealthRecord[]> {
       // 1. Direct Supabase query for instant sub-50ms loading
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           let query = supabase
             .from('health_records')
             .select('*')
-            .eq('user_id', authData.user.id)
+            .eq('user_id', sbUser.id)
             .order('recorded_at', { ascending: false });
 
           if (recordType) {
@@ -681,12 +697,12 @@ export const api = {
     async addRecord(payload: HealthRecordCreate): Promise<HealthRecord> {
       // 1. Direct Supabase insert for instant sub-50ms speed
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           const { data, error } = await supabase
             .from('health_records')
             .insert({
-              user_id: authData.user.id,
+              user_id: sbUser.id,
               record_type: payload.record_type,
               data: payload.data,
               source: payload.source || 'user_entered',
@@ -713,12 +729,12 @@ export const api = {
       // 1. Check existing records in Supabase directly
       let cachedRecords: HealthRecord[] = [];
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           const { data: records, error } = await supabase
             .from('health_records')
             .select('*')
-            .eq('user_id', authData.user.id)
+            .eq('user_id', sbUser.id)
             .order('recorded_at', { ascending: false })
             .limit(20);
 
@@ -800,12 +816,12 @@ export const api = {
 
     async listReports(): Promise<HealthReport[]> {
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           const { data, error } = await supabase
             .from('health_reports')
             .select('*')
-            .eq('user_id', authData.user.id)
+            .eq('user_id', sbUser.id)
             .order('generated_at', { ascending: false });
 
           if (!error && Array.isArray(data)) {
@@ -832,12 +848,12 @@ export const api = {
   users: {
     async getProfile(): Promise<UserProfile> {
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           const { data, error } = await supabase
             .from('user_profiles')
             .select('*')
-            .eq('user_id', authData.user.id)
+            .eq('user_id', sbUser.id)
             .single();
 
           if (!error && data) {
@@ -845,11 +861,11 @@ export const api = {
           }
 
           return {
-            id: authData.user.id,
-            user_id: authData.user.id,
+            id: sbUser.id,
+            user_id: sbUser.id,
             display_name:
-              (authData.user.user_metadata?.display_name as string) ||
-              authData.user.email?.split('@')[0] ||
+              (sbUser.user_metadata?.display_name as string) ||
+              sbUser.email?.split('@')[0] ||
               'User',
             medical_conditions: [],
             allergies: [],
@@ -863,13 +879,13 @@ export const api = {
 
     async updateProfile(payload: UserProfileUpdate): Promise<UserProfile> {
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           const { data, error } = await supabase
             .from('user_profiles')
             .upsert(
               {
-                user_id: authData.user.id,
+                user_id: sbUser.id,
                 ...payload,
                 updated_at: new Date().toISOString(),
               },
@@ -907,12 +923,12 @@ export const api = {
   privacy: {
     async getSettings(): Promise<PrivacySettings> {
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           const { data, error } = await supabase
             .from('privacy_settings')
             .select('*')
-            .eq('user_id', authData.user.id)
+            .eq('user_id', sbUser.id)
             .single();
 
           if (!error && data) {
@@ -933,13 +949,13 @@ export const api = {
 
     async updateSettings(payload: PrivacySettingsUpdate): Promise<PrivacySettings> {
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData.user) {
+        const sbUser = await getSessionUser();
+        if (sbUser) {
           const { data, error } = await supabase
             .from('privacy_settings')
             .upsert(
               {
-                user_id: authData.user.id,
+                user_id: sbUser.id,
                 ...payload,
                 consent_updated_at: new Date().toISOString(),
               },
