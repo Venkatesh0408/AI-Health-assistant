@@ -3,15 +3,26 @@
 import base64
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from google import genai
+from google.genai import types
 
 from app.config import settings
 from app.utils.safety import MEDICAL_DISCLAIMER
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
+)
 
 HEALTH_ASSISTANT_SYSTEM_PROMPT = """You are a knowledgeable, empathetic AI health information assistant. You help users understand their health concerns and make informed decisions about seeking care.
 
@@ -30,7 +41,7 @@ RULES:
    - What to Avoid: Common mistakes
    - When to See a Doctor: Clear guidance on when professional care is needed
    - Emergency Warning Signs: Red flags requiring immediate attention
-8. Be conversational and clear, not clinical or robotic.
+8. Be conversational, concise, and scannable (2-4 clear bullet points or short sentences per section), not clinical or robotic.
 9. Ask follow-up questions when you need more context, but don't over-ask.
 10. If you cannot provide reliable information, say so honestly.
 11. Cite reputable sources (WHO, NHS, MedlinePlus) when relevant.
@@ -86,13 +97,30 @@ class AIService:
         return self._model
 
     def _get_client(self) -> genai.Client:
-        """Lazily initialize the google-genai Client."""
+        """Lazily initialize google-genai Client with bounded timeout and single-attempt failover."""
         if self._client is None:
             api_key = self._api_key or settings.GEMINI_API_KEY
             if not api_key:
                 raise RuntimeError("GEMINI_API_KEY is not configured.")
-            self._client = genai.Client(api_key=api_key)
+            try:
+                self._client = genai.Client(
+                    api_key=api_key,
+                    http_options=types.HttpOptions(
+                        timeout=16000,
+                        retry_options=types.HttpRetryOptions(attempts=1),
+                    ),
+                )
+            except Exception:
+                self._client = genai.Client(api_key=api_key)
         return self._client
+
+    def _candidate_models(self, preferred_model: Optional[str] = None) -> list[str]:
+        """Return deduplicated ordered model list for automatic failover."""
+        candidates: list[str] = []
+        for candidate in (preferred_model, self._model, *DEFAULT_FALLBACK_MODELS):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+        return candidates
 
     @staticmethod
     def _extract_text_from_interaction(interaction: Any) -> str:
@@ -205,38 +233,80 @@ class AIService:
         prompt: str,
         previous_interaction_id: Optional[str] = None,
         system_instruction: Optional[str] = None,
+        fallback_prompt: Optional[str] = None,
+        preferred_model: Optional[str] = None,
     ) -> AIResponse:
-        """Call Gemini Interactions API (`client.interactions.create`) for text health guidance."""
+        """Call Gemini Interactions API with fast automatic model fallback on 429/503/timeout."""
+        last_error = "ai_unavailable"
         try:
             client = self._get_client()
+        except Exception as exc:
+            logger.error("AI client initialization failed with %s", type(exc).__name__)
+            return self._fallback_response(type(exc).__name__)
+
+        sys_instr = system_instruction or HEALTH_ASSISTANT_SYSTEM_PROMPT
+        deadline = time.monotonic() + 48.0
+        for idx, model_name in enumerate(self._candidate_models(preferred_model)):
+            if idx > 0 and time.monotonic() >= deadline:
+                break
+            use_prev = bool(previous_interaction_id) and (
+                idx == 0 and (preferred_model is None or model_name == preferred_model)
+            )
             kwargs: dict[str, Any] = {
-                "model": self._model,
-                "input": prompt,
-                "system_instruction": system_instruction or HEALTH_ASSISTANT_SYSTEM_PROMPT,
+                "model": model_name,
+                "input": prompt if use_prev else (fallback_prompt or prompt),
+                "system_instruction": sys_instr,
             }
-            if previous_interaction_id:
+            if use_prev and previous_interaction_id:
                 kwargs["previous_interaction_id"] = previous_interaction_id
 
-            interaction = client.interactions.create(**kwargs)
-            text = self._extract_text_from_interaction(interaction)
-            interaction_id = getattr(interaction, "id", None)
+            try:
+                interaction = client.interactions.create(**kwargs)
+                text = self._extract_text_from_interaction(interaction)
+                interaction_id = getattr(interaction, "id", None)
+                if not text:
+                    last_error = "empty_model_output"
+                    logger.warning("Gemini model=%s returned empty output", model_name)
+                    continue
 
-            if not text:
-                logger.warning("Gemini Interactions API returned empty output.")
-                return self._fallback_response("empty_model_output")
+                sections = self.parse_structured_sections(text)
+                return AIResponse(
+                    text=text,
+                    interaction_id=str(interaction_id) if interaction_id else None,
+                    sections=sections,
+                    model=model_name,
+                    is_fallback=False,
+                )
+            except Exception as exc:
+                last_error = type(exc).__name__
+                logger.warning(
+                    "Gemini model=%s failed with %s; trying fallback if available",
+                    model_name,
+                    last_error,
+                )
+                # If chained interaction failed on same model, also allow stateless retry with fallback_prompt
+                if use_prev and fallback_prompt and time.monotonic() < deadline:
+                    try:
+                        retry_interaction = client.interactions.create(
+                            model=model_name,
+                            input=fallback_prompt,
+                            system_instruction=sys_instr,
+                        )
+                        retry_text = self._extract_text_from_interaction(retry_interaction)
+                        retry_id = getattr(retry_interaction, "id", None)
+                        if retry_text:
+                            return AIResponse(
+                                text=retry_text,
+                                interaction_id=str(retry_id) if retry_id else None,
+                                sections=self.parse_structured_sections(retry_text),
+                                model=model_name,
+                                is_fallback=False,
+                            )
+                    except Exception:
+                        pass
 
-            sections = self.parse_structured_sections(text)
-            return AIResponse(
-                text=text,
-                interaction_id=str(interaction_id) if interaction_id else None,
-                sections=sections,
-                model=self._model,
-                is_fallback=False,
-            )
-        except Exception as exc:
-            # Never log prompt/health text — log only exception class
-            logger.error("AI health response failed with %s", type(exc).__name__)
-            return self._fallback_response(type(exc).__name__)
+        logger.error("All Gemini candidate models failed (last=%s)", last_error)
+        return self._fallback_response(last_error)
 
     def analyze_image(
         self,
@@ -246,45 +316,62 @@ class AIService:
         previous_interaction_id: Optional[str] = None,
     ) -> AIResponse:
         """Call Gemini Interactions API (`client.interactions.create`) with multimodal image + text input."""
+        last_error = "ai_unavailable"
         try:
             client = self._get_client()
-            encoded_image = base64.b64encode(image_bytes).decode("ascii")
-            multimodal_input = [
-                {"type": "text", "text": prompt},
-                {
-                    "type": "image",
-                    "data": encoded_image,
-                    "mime_type": mime_type,
-                },
-            ]
+        except Exception as exc:
+            logger.error("AI image client initialization failed with %s", type(exc).__name__)
+            return self._fallback_response(type(exc).__name__, is_image=True)
 
+        encoded_image = base64.b64encode(image_bytes).decode("ascii")
+        multimodal_input = [
+            {"type": "text", "text": prompt},
+            {
+                "type": "image",
+                "data": encoded_image,
+                "mime_type": mime_type,
+            },
+        ]
+
+        deadline = time.monotonic() + 48.0
+        for idx, model_name in enumerate(self._candidate_models()):
+            if idx > 0 and time.monotonic() >= deadline:
+                break
             kwargs: dict[str, Any] = {
-                "model": self._model,
+                "model": model_name,
                 "input": multimodal_input,
                 "system_instruction": IMAGE_ANALYSIS_SYSTEM_PROMPT,
             }
-            if previous_interaction_id:
+            if idx == 0 and previous_interaction_id:
                 kwargs["previous_interaction_id"] = previous_interaction_id
 
-            interaction = client.interactions.create(**kwargs)
-            text = self._extract_text_from_interaction(interaction)
-            interaction_id = getattr(interaction, "id", None)
+            try:
+                interaction = client.interactions.create(**kwargs)
+                text = self._extract_text_from_interaction(interaction)
+                interaction_id = getattr(interaction, "id", None)
+                if not text:
+                    last_error = "empty_multimodal_output"
+                    logger.warning("Gemini multimodal model=%s returned empty output", model_name)
+                    continue
 
-            if not text:
-                logger.warning("Gemini multimodal Interactions API returned empty output.")
-                return self._fallback_response("empty_multimodal_output", is_image=True)
+                sections = self.parse_structured_sections(text)
+                return AIResponse(
+                    text=text,
+                    interaction_id=str(interaction_id) if interaction_id else None,
+                    sections=sections,
+                    model=model_name,
+                    is_fallback=False,
+                )
+            except Exception as exc:
+                last_error = type(exc).__name__
+                logger.warning(
+                    "Gemini multimodal model=%s failed with %s; trying fallback if available",
+                    model_name,
+                    last_error,
+                )
 
-            sections = self.parse_structured_sections(text)
-            return AIResponse(
-                text=text,
-                interaction_id=str(interaction_id) if interaction_id else None,
-                sections=sections,
-                model=self._model,
-                is_fallback=False,
-            )
-        except Exception as exc:
-            logger.error("AI image analysis failed with %s", type(exc).__name__)
-            return self._fallback_response(type(exc).__name__, is_image=True)
+        logger.error("All Gemini multimodal models failed (last=%s)", last_error)
+        return self._fallback_response(last_error, is_image=True)
 
     def _fallback_response(self, reason: str, is_image: bool = False) -> AIResponse:
         """Graceful non-diagnostic fallback when the AI service is temporarily unavailable."""
