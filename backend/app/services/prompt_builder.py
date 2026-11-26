@@ -43,13 +43,13 @@ HEALTH_QUERY_TEMPLATE = """{profile_block}{history_block}{context_notes}
 User's current health question:
 \"\"\"{user_message}\"\"\"
 
-Respond clearly, empathetically, and safely following your system instructions. Include relevant structured sections and never provide a definitive medical diagnosis or prescribe specific medication dosages."""
+First show clearly that you understand the user's request, then keep your entire answer brief (~150-220 words total) and scannable under these headings: Understanding Your Concern, Why This Happened, Possible Causes, What Happens If Neglected, Solution & Next Steps, and Terms, Conditions & Medical Disclaimer. Always use uncertainty language and never provide a medical diagnosis or specific medication dosages."""
 
 FOLLOWUP_QUERY_TEMPLATE = """{profile_block}{history_block}{context_notes}
 The user shared a brief or general concern:
 \"\"\"{user_message}\"\"\"
 
-Acknowledge their concern empathetically, provide helpful general health information with uncertainty language, and ask 2-3 focused, respectful clarifying questions (such as duration, severity, or accompanying symptoms) to help give more tailored guidance."""
+First confirm clearly that you understand their request (with at most 1-2 short clarifying questions in Understanding Your Concern), then give a concise response (~150-220 words total) covering Why This Happened, Possible Causes, What Happens If Neglected, Solution & Next Steps, and Terms, Conditions & Medical Disclaimer without long paragraphs."""
 
 IMAGE_ANALYSIS_TEMPLATE = """{profile_block}The user uploaded a health-related image and asked:
 \"\"\"{question}\"\"\"

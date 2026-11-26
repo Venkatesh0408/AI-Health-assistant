@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Google Gemini AI configuration
     GEMINI_API_KEY: str = Field(default="", description="Google Gemini API key")
     GEMINI_MODEL: str = Field(
-        default="gemini-4-hydrogen", description="Gemini model identifier"
+        default="gemini-3.5-flash-lite", description="Gemini model identifier"
     )
 
     # Voice AI (Text-to-Speech & Speech) configuration

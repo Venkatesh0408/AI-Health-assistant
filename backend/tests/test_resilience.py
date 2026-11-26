@@ -139,3 +139,58 @@ class TestAIModelCascade:
         assert res.model == "gemini-3.5-flash-lite"
         assert res.interaction_id == "inter_fallback_1"
         assert fake_client.interactions.create.call_count == 2
+
+
+class TestConciseStructuredAIFormat:
+    def test_default_model_uses_fast_flash_lite_and_token_budget(self, monkeypatch) -> None:
+        from types import SimpleNamespace
+        from app.config import settings
+        from app.services.ai_service import AIService
+
+        monkeypatch.setattr(settings, "GEMINI_MODEL", "gemini-3.5-flash-lite")
+        svc = AIService(api_key="fake-key")
+        assert svc.model == "gemini-3.5-flash-lite"
+
+        fake_client = MagicMock()
+        fake_client.interactions.create.return_value = SimpleNamespace(
+            id="inter_fast_1",
+            output_text=(
+                "### Understanding Your Concern\nYou asked about a mild cough.\n\n"
+                "### Why This Happened\nAirway irritation may trigger a cough reflex.\n\n"
+                "### Possible Causes\n- Viral cold\n- Dry air\n\n"
+                "### What Happens If Neglected\n- Could worsen; call 112/108 for trouble breathing.\n\n"
+                "### Solution & Next Steps\n- Stay hydrated and rest; see a doctor if persistent.\n\n"
+                "### Terms, Conditions & Medical Disclaimer\n"
+                "Informational use under AI Health Monitor Terms & Conditions — not a medical diagnosis."
+            ),
+        )
+        svc._client = fake_client
+
+        res = svc.generate_health_response("I have a mild cough")
+        assert res.is_fallback is False
+        assert res.model == "gemini-3.5-flash-lite"
+        call_kwargs = fake_client.interactions.create.call_args.kwargs
+        assert call_kwargs["generation_config"]["max_output_tokens"] == 750
+        for heading in (
+            "Understanding Your Concern",
+            "Why This Happened",
+            "Possible Causes",
+            "What Happens If Neglected",
+            "Solution & Next Steps",
+            "Terms, Conditions & Medical Disclaimer",
+        ):
+            assert heading in res.sections
+
+    def test_system_prompt_requires_concise_six_part_structure(self) -> None:
+        from app.services.ai_service import HEALTH_ASSISTANT_SYSTEM_PROMPT
+
+        for required in (
+            "Understanding Your Concern",
+            "Why This Happened",
+            "Possible Causes",
+            "What Happens If Neglected",
+            "Solution & Next Steps",
+            "Terms, Conditions & Medical Disclaimer",
+            "Terms & Conditions",
+        ):
+            assert required in HEALTH_ASSISTANT_SYSTEM_PROMPT

@@ -17,36 +17,36 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_FALLBACK_MODELS: tuple[str, ...] = (
     "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-    "gemini-3.7-flash",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
     "gemini-3.8-flash",
+    "gemini-4-hydrogen",
 )
 
-HEALTH_ASSISTANT_SYSTEM_PROMPT = """You are a knowledgeable, empathetic AI health information assistant. You help users understand their health concerns and make informed decisions about seeking care.
+HEALTH_ASSISTANT_SYSTEM_PROMPT = """You are an empathetic, concise AI health information assistant. Help users feel heard quickly with brief, practical, easy-to-scan guidance.
 
 RULES:
-1. NEVER claim to provide a medical diagnosis.
-2. NEVER prescribe specific medications or dosages.
-3. NEVER discourage seeking professional medical care.
-4. ALWAYS use uncertainty language ("may", "could", "possibly").
-5. ALWAYS recommend professional consultation for serious symptoms.
-6. ALWAYS be transparent about limitations.
-7. For every health concern, structure your response with these sections (adapt as needed):
-   - Understanding Your Concern: Acknowledge what the user described
-   - Possible Explanations: General causes (use "may include", "could be related to")
-   - What You Can Do Now: Safe, general self-care suggestions
-   - Recommended Precautions: What to watch for
-   - What to Avoid: Common mistakes
-   - When to See a Doctor: Clear guidance on when professional care is needed
-   - Emergency Warning Signs: Red flags requiring immediate attention
-8. Be conversational, concise, and scannable (2-4 clear bullet points or short sentences per section), not clinical or robotic.
-9. Ask follow-up questions when you need more context, but don't over-ask.
-10. If you cannot provide reliable information, say so honestly.
-11. Cite reputable sources (WHO, NHS, MedlinePlus) when relevant.
+1. NEVER claim to provide a medical diagnosis or prescribe specific medications/dosages.
+2. ALWAYS use cautious uncertainty language ("may", "could", "possibly").
+3. Keep the ENTIRE reply concise and focused (roughly 150-220 words total; short sentences and crisp bullet points so the user is never overwhelmed).
+4. First make sure the user knows you understood their request, then answer using ONLY these exact markdown headings in this exact order:
+   ### Understanding Your Concern
+   - 1-2 short sentences restating the user's request clearly. If key context (like duration or severity) is missing, include at most 1 brief clarifying question here.
+   ### Why This Happened
+   - 1-2 short plain-language sentences explaining the possible general mechanism.
+   ### Possible Causes
+   - 2-4 crisp bullet points of common general factors (non-diagnostic).
+   ### What Happens If Neglected
+   - 2-3 brief bullets covering possible risks if ignored and urgent emergency red flags (call **112** or **108** in India).
+   ### Solution & Next Steps
+   - 3-4 short bullets on safe, general self-care and when to see a qualified doctor.
+   ### Terms, Conditions & Medical Disclaimer
+   - 1-2 brief lines stating: Provided for informational and educational use only under AI Health Monitor Terms & Conditions — this is not a medical diagnosis or prescription. Always consult a licensed doctor; in an emergency call **112** or **108**.
+5. If a query is non-health or off-topic, briefly clarify your scope cleanly under Understanding Your Concern and Terms, Conditions & Medical Disclaimer.
 
-You are NOT a doctor. You provide health information and guidance to help users make informed decisions."""
+You are NOT a doctor. Keep explanations human, clear, concise, and safe."""
 
 IMAGE_ANALYSIS_SYSTEM_PROMPT = (
     HEALTH_ASSISTANT_SYSTEM_PROMPT
@@ -59,6 +59,11 @@ IMAGE_ANALYSIS_SYSTEM_PROMPT = (
 
 _SECTION_NAMES = (
     "Understanding Your Concern",
+    "Why This Happened",
+    "Possible Causes",
+    "What Happens If Neglected",
+    "Solution & Next Steps",
+    "Terms, Conditions & Medical Disclaimer",
     "Possible Explanations",
     "What You Can Do Now",
     "Recommended Precautions",
@@ -81,7 +86,7 @@ class AIResponse:
 
 
 class AIService:
-    """Wrapper around google-genai Client using the Interactions API (`gemini-4-hydrogen`)."""
+    """Wrapper around google-genai Client using the Interactions API (fast flash-lite primary + cascade)."""
 
     def __init__(
         self,
@@ -89,7 +94,7 @@ class AIService:
         model: Optional[str] = None,
     ) -> None:
         self._api_key = api_key if api_key is not None else settings.GEMINI_API_KEY
-        self._model = model or settings.GEMINI_MODEL or "gemini-4-hydrogen"
+        self._model = model or settings.GEMINI_MODEL or "gemini-3.5-flash-lite"
         self._client: Optional[genai.Client] = None
 
     @property
@@ -256,6 +261,7 @@ class AIService:
                 "model": model_name,
                 "input": prompt if use_prev else (fallback_prompt or prompt),
                 "system_instruction": sys_instr,
+                "generation_config": {"max_output_tokens": 750},
             }
             if use_prev and previous_interaction_id:
                 kwargs["previous_interaction_id"] = previous_interaction_id
@@ -291,6 +297,7 @@ class AIService:
                             model=model_name,
                             input=fallback_prompt,
                             system_instruction=sys_instr,
+                            generation_config={"max_output_tokens": 750},
                         )
                         retry_text = self._extract_text_from_interaction(retry_interaction)
                         retry_id = getattr(retry_interaction, "id", None)
@@ -341,6 +348,7 @@ class AIService:
                 "model": model_name,
                 "input": multimodal_input,
                 "system_instruction": IMAGE_ANALYSIS_SYSTEM_PROMPT,
+                "generation_config": {"max_output_tokens": 750},
             }
             if idx == 0 and previous_interaction_id:
                 kwargs["previous_interaction_id"] = previous_interaction_id
@@ -392,13 +400,12 @@ class AIService:
                 "### Understanding Your Concern\n"
                 "Thank you for sharing your health question. I am temporarily unable to generate "
                 "a full AI response right now.\n\n"
-                "### What You Can Do Now\n"
+                "### Solution & Next Steps\n"
                 "- Please try submitting your question again in a moment.\n"
-                "- Keep note of when your symptoms started, how severe they are, and anything that makes them better or worse.\n\n"
-                "### When to See a Doctor\n"
-                "If your symptoms are persistent, worsening, or worrying you, please consult a qualified healthcare professional. "
-                "If you are experiencing severe or sudden emergency symptoms, call **112** or **108** immediately.\n\n"
-                f"---\n*{MEDICAL_DISCLAIMER}*"
+                "- Note when your symptoms started, how severe they are, and consult a qualified doctor if symptoms persist or worsen.\n\n"
+                "### Terms, Conditions & Medical Disclaimer\n"
+                f"Provided for informational use under AI Health Monitor Terms & Conditions. {MEDICAL_DISCLAIMER} "
+                "For severe or emergency symptoms, call **112** or **108** immediately."
             )
 
         return AIResponse(
